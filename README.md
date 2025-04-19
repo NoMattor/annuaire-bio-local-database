@@ -6,7 +6,6 @@ Ce projet  vise à recenser les **producteurs, magasins et marchés bio et locau
 
 - `data/` : fichiers CSV des producteurs, magasins et marchés
 - `scripts/` : outils pour extraire et nettoyer les données
-- `sources/` : liste des sources (Open Data, sites, etc.)
 
 ## ⚠️ Conditions d'utilisation
 
