@@ -1,185 +1,221 @@
 #!/usr/bin/env python3
 """
-Google Places Bio Directory Scraper
-----------------------------------
+scrape_produits_bio.py
 
-Recherche automatiquement les magasins bio, fermes et marchés locaux via l’API
-Google Places (Text Search) puis exporte un CSV exploitable dans le dossier
-« data » à la racine du projet.
-
-Dépendances :
-  * requests
-  * python-dotenv
-
-Installation :
-  pip install requests python-dotenv
-
-Configuration :
-  Créez un fichier `.env` à la racine du projet (annuaire-bio-local-database/.env) :
-      GOOGLE_API_KEY=VOTRE_CLÉ_ICI
-
-
-Structure de projet recommandée :
-  annuaire-bio-local-database/
-  ├── .env             # variables d’environnement
-  ├── data/            # CSV exportés ici
-  └── scripts/
-      └── scrape_produits_bio.py
-
-Exemple d’exécution depuis le dossier scripts :
-  cd annuaire-bio-local-database/scripts
-  python3 scrape_produits_bio.py \
-    -k "magasin bio" "marché fermier" "circuit court" \
-    -l "Namur, Belgium" \
-    -o namur_places.csv  # enregistré dans ../data/namur_places.csv
-
+Module pour extraire via Google Places API un annuaire de magasins/ferm...
+Expose une fonction `run_scraper(keywords, location, output_path)` pour
+être importée et pilotée depuis un autre script.
 """
 
-from __future__ import annotations
 import os
 import time
-import csv
-import re
 import argparse
-from typing import List, Dict, Iterable, Set
+import csv
 from pathlib import Path
 
 import requests
 from dotenv import load_dotenv, find_dotenv
 
-# ---------------------------------------------------------------------------
-# Configuration des fichiers et chargement du .env
-# ---------------------------------------------------------------------------
-SCRIPT_DIR   = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-
-# Recherche automatique du .env dans les répertoires parents
-env_path = find_dotenv(filename=".env", raise_error_if_not_found=False)
-if not env_path:
-    print(f"⚠️  .env non trouvé dans {PROJECT_ROOT} ou ses dossiers parents.")
+# -----------------------------------------------------------------------------
+# Chargement du .env
+# -----------------------------------------------------------------------------
+env_path = find_dotenv()
+if env_path:
+    load_dotenv(env_path, override=True)
 else:
-    print(f"Chargement des variables d'environnement depuis : {env_path}")
-# Force le chargement depuis le fichier .env
-load_dotenv(env_path, override=True)
+    print("⚠️  Aucun fichier .env trouvé (looked at {}).".format(env_path))
 
-# Création automatique du dossier data
-DATA_DIR = PROJECT_ROOT / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-DEFAULT_OUTPUT = DATA_DIR / "places.csv"
-
-# Types Google Places à exclure (fausses correspondances comme tribunal)
-EXCLUDE_TYPES: Set[str] = {
+# -----------------------------------------------------------------------------
+# Constantes de filtrage
+# -----------------------------------------------------------------------------
+EXCLUDE_TYPES = {
     "courthouse",
     "local_government_office",
 }
 
-# Mots interdits dans le nom pour filtrer encore plus
-EXCLUDE_NAME_KEYWORDS = ["tribunal", "palais"]
+# Mots interdits dans le nom (lowercase)
+EXCLUDE_NAME_KEYWORDS = {
+    "tribunal",
+    "palais",
+}
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-def parse_address(address: str) -> tuple[str, str]:
-    m = re.search(r",\s*(\d{4,5})\s+([^,]+)", address)
-    return (m.group(1).strip(), m.group(2).strip()) if m else ("", "")
+API_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json"
 
-def build_maps_link(place_id: str) -> str:
-    return f"https://www.google.com/maps/place/?q=place_id:{place_id}"
 
-# ---------------------------------------------------------------------------
-# Google Places logic
-# ---------------------------------------------------------------------------
-def places_text_search(query: str, api_key: str) -> List[Dict]:
-    endpoint = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-    params = {"query": query, "key": api_key}
-    all_results: List[Dict] = []
+# -----------------------------------------------------------------------------
+# Helpers internes
+# -----------------------------------------------------------------------------
+def load_api_key() -> str:
+    """Lit la clé depuis GOOGLE_API_KEY ou quitte."""
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise SystemExit("⚠️  GOOGLE_API_KEY manquant. Vérifiez votre .env.")
+    return api_key
+
+
+def fetch_places_for_keyword(keyword: str, location: str, api_key: str) -> list:
+    """
+    Interroge l'API Text Search pour un mot‑clé + lieu,
+    gère la pagination et renvoie la liste brute de lieux.
+    """
+    params = {
+        "query": f"{keyword} in {location}",
+        "key": api_key,
+    }
+    all_results = []
+
     while True:
-        resp = requests.get(endpoint, params=params, timeout=30)
+        resp = requests.get(API_URL, params=params)
         resp.raise_for_status()
         data = resp.json()
+
         all_results.extend(data.get("results", []))
 
-        token = data.get("next_page_token")
-        if not token:
+        next_token = data.get("next_page_token")
+        if not next_token:
             break
+
+        # Respect minimum 2s avant d'utiliser next_page_token
         time.sleep(2.1)
-        params = {"pagetoken": token, "key": api_key}
+        params = {
+            "pagetoken": next_token,
+            "key": api_key,
+        }
 
     return all_results
 
 
-def scrape(keywords: Iterable[str], location: str, api_key: str) -> Iterable[Dict]:
-    seen: Dict[str, Dict] = {}
+def parse_city_postal(formatted_address: str) -> tuple:
+    """
+    Extrait approximativement la ville et le code postal
+    depuis formatted_address (split sur les virgules).
+    """
+    parts = [p.strip() for p in formatted_address.split(",")]
+    if len(parts) >= 2:
+        city_post = parts[-2]
+        tokens = city_post.split()
+        postal_code = tokens[0]
+        city = " ".join(tokens[1:]) if len(tokens) > 1 else ""
+    else:
+        city = ""
+        postal_code = ""
+    return city, postal_code
+
+
+def extract_place_data(place: dict) -> dict:
+    """Formate un dict de l'API en dict plat pour le CSV."""
+    place_id = place.get("place_id", "")
+    name = place.get("name", "").strip()
+    address = place.get("formatted_address", "").strip()
+    city, postal_code = parse_city_postal(address)
+    rating = place.get("rating", "")
+    reviews = place.get("user_ratings_total", "")
+    types = place.get("types", [])
+
+    return {
+        "place_id": place_id,
+        "name": name,
+        "address": address,
+        "city": city,
+        "postal_code": postal_code,
+        "rating": rating,
+        "user_ratings_total": reviews,
+        "types": types,
+        "maps_url": f"https://www.google.com/maps/place/?q=place_id:{place_id}"
+    }
+
+
+# -----------------------------------------------------------------------------
+# Fonction principale à importer
+# -----------------------------------------------------------------------------
+def run_scraper(
+    keywords: list[str],
+    location: str,
+    output_path: str
+) -> int:
+    """
+    Lance le scraping pour une liste de keywords et un lieu,
+    écrit le CSV à output_path. Retourne le nombre de lignes produites.
+    """
+    api_key = load_api_key()
+    all_places = []
 
     for kw in keywords:
-        query = f"{kw} in {location}"
-        print(f"→ Recherche : {query}")
-        for place in places_text_search(query, api_key):
-            pid = place.get("place_id")
-            if not pid or pid in seen:
-                continue
+        print(f"→ Recherche : {kw} in {location}")
+        results = fetch_places_for_keyword(kw, location, api_key)
+        all_places.extend(results)
+        # Petite pause entre deux recherches pour ne pas dépasser la QPS
+        time.sleep(1.0)
 
-            # Filtrage par type (exclut tribunaux, administrations...)
-            types = set(place.get("types", []))
-            if types & EXCLUDE_TYPES:
-                continue
+    # Déduplication par place_id (on conserve la première occurrence)
+    unique = {}
+    for p in all_places:
+        pid = p.get("place_id")
+        if pid and pid not in unique:
+            unique[pid] = p
 
-            # Filtrage par mot dans le nom
-            name_lower = place.get("name", "").lower()
-            if any(kw in name_lower for kw in EXCLUDE_NAME_KEYWORDS):
-                continue
+    # Filtrage par type et par mots dans le nom
+    filtered = []
+    for raw in unique.values():
+        data = extract_place_data(raw)
+        # Exclusion si type black-listé
+        if set(data["types"]) & EXCLUDE_TYPES:
+            continue
+        # Exclusion si nom contient un mot interdit
+        low_name = data["name"].lower()
+        if any(k in low_name for k in EXCLUDE_NAME_KEYWORDS):
+            continue
+        filtered.append(data)
 
-            addr = place.get("formatted_address", "")
-            postal, city = parse_address(addr)
+    # Préparation du dossier de sortie
+    out_file = Path(output_path)
+    out_file.parent.mkdir(parents=True, exist_ok=True)
 
-            seen[pid] = {
-                "name": place.get("name", ""),
-                "address": addr,
-                "city": city,
-                "postal_code": postal,
-                "rating": place.get("rating", ""),
-                "reviews": place.get("user_ratings_total", ""),
-                "types": "|".join(place.get("types", [])),
-                "maps_url": build_maps_link(pid),
-            }
-        # Pause pour respecter la QPS
-        time.sleep(1)
-
-    return seen.values()
-
-# ---------------------------------------------------------------------------
-# CSV export
-# ---------------------------------------------------------------------------
-def write_csv(rows: Iterable[Dict], output: Path) -> None:
-    output = Path(output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    fields = ["name","address","city","postal_code","rating","reviews","types","maps_url"]
-    with output.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fields)
+    # Écriture CSV
+    fieldnames = [
+        "name",
+        "address",
+        "city",
+        "postal_code",
+        "rating",
+        "user_ratings_total",
+        "types",
+        "maps_url",
+    ]
+    with out_file.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        for r in rows:
-            writer.writerow(r)
-    print(f"\n✅ {sum(1 for _ in rows)} lignes sauvegardées dans {output}\n")
+        for row in filtered:
+            # jointure des types par pipe
+            row["types"] = "|".join(row["types"])
+            writer.writerow({k: row[k] for k in fieldnames})
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-def main() -> None:
-    
-    api_key = os.getenv("GOOGLE_API_KEY")  # Assurez-vous que votre .env contient GOOGLE_API_KEY
-    
-    if not api_key:
-        raise SystemExit("⚠️  GOOGLE_PLACES_API_KEY manquant. Vérifiez votre .env.")
+    return len(filtered)
 
-    parser = argparse.ArgumentParser(description="Scrape les locaux bio via Google Places")
-    parser.add_argument("-k","--keywords",nargs="+",required=True,help="Mots-clés")
-    parser.add_argument("-l","--location",required=True,help="Ville ou lat,lng")
-    parser.add_argument("-o","--output",type=Path,default=DEFAULT_OUTPUT,help="CSV (relatif à data/)")
-    args = parser.parse_args()
 
-    rows = list(scrape(args.keywords, args.location, api_key))
-    out = args.output if args.output.is_absolute() else DATA_DIR / args.output
-    write_csv(rows, out)
-
+# -----------------------------------------------------------------------------
+# Interface CLI conservée
+# -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Scrape Google Places pour magasins/ferm..."
+    )
+    parser.add_argument(
+        "-k", "--keywords",
+        nargs="+", required=True,
+        help="Liste de mots-clés (ex. magasin bio marché fermier)"
+    )
+    parser.add_argument(
+        "-l", "--location",
+        required=True,
+        help="Zone géographique (ex. Namur, Belgium)"
+    )
+    parser.add_argument(
+        "-o", "--output",
+        required=True,
+        help="Chemin vers le fichier CSV de sortie"
+    )
+
+    args = parser.parse_args()
+    count = run_scraper(args.keywords, args.location, args.output)
+    print(f"✅ {count} lignes sauvegardées dans {args.output}")
