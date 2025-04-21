@@ -1,3 +1,4 @@
+# Catégories de lieu
 producteur bio
 producteur local
 ferme bio
@@ -8,34 +9,21 @@ magasin de produits biologiques
 épicerie bio
 boutique bio locale
 magasin de producteurs
-marché bio
-marché fermier
-marché de producteurs
-marché bio local
-marché paysan
-œufs bio
 ferme avicole
-volailles bio
-lait bio
-fromagerie
-crèmerie bio
-yaourt bio
-légumes bio
-fruits bio
+
+
+# Spécialités produits (uniquement bio)
+ferme œufs bio
+ferme lait bio
+
+producteur légumes bio
+producteur fruits bio
 primeurs bio
-fruiterie bio
-pain bio
-boulangerie bio
-viande bio
-boucherie bio
-charcuterie bio
-miel bio
-apiculteur
-épicerie fine bio
-conserverie
-huile d'olive bio
-épices bio
-jus de fruits bio
-cave à vin bio
-brasserie bio
-distillerie bio
+
+élevage vente viande vache
+élevage vente viande poulet
+
+ferme miel 
+ferme apiculteur 
+
+

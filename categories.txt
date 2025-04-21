@@ -8,8 +8,19 @@ magasin de produits biologiques,magasin
 épicerie bio,magasin
 boutique bio locale,magasin
 magasin de producteurs,magasin
-marché bio,marché
-marché fermier,marché
-marché de producteurs,marché
-marché bio local,marché
-marché paysan,marché
+ferme avicole,producteur
+
+ferme œufs bio,producteur
+ferme lait bio,producteur
+
+producteur légumes bio,producteur
+producteur fruits bio,producteur
+primeurs bio,producteur
+
+élevage vente viande vache,producteur
+élevage vente viande poulet,producteur
+
+ferme miel,producteur
+ferme apiculteur,producteur 
+
+
