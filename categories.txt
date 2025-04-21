@@ -1,0 +1,15 @@
+producteur bio,producteur
+producteur local,producteur
+ferme bio,producteur
+vente directe à la ferme,producteur
+circuit court,producteur
+magasin bio,magasin
+magasin de produits biologiques,magasin
+épicerie bio,magasin
+boutique bio locale,magasin
+magasin de producteurs,magasin
+marché bio,marché
+marché fermier,marché
+marché de producteurs,marché
+marché bio local,marché
+marché paysan,marché
