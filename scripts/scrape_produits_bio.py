@@ -37,6 +37,7 @@ EXCLUDE_TYPES = {
 EXCLUDE_NAME_KEYWORDS = {
     "tribunal",
     "palais",
+    ""
 }
 
 API_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json"
