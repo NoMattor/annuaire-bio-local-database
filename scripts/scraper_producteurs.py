@@ -2,9 +2,9 @@
 """
 scraper_producteur.py
 
-Scraper dédié aux producteurs locaux/bio en Belgique.
-Utilise l'API Google Places pour rechercher uniquement les lieux correspondant
-aux mots-clés définis dans `keyword_producteurs.txt`.
+Scraper dédié aux producteurs (fermes) locaux/bio en Belgique.
+Utilise l'API Google Places pour rechercher uniquement les producteurs
+en s'appuyant sur des types et mots-clés stricts.
 
 Lit :
  - cities.txt               (liste des villes francophones)
@@ -15,7 +15,7 @@ avec pour chaque producteur :
  - name, address, city, postal_code, rating, user_ratings_total, types, maps_url
  - matched_keyword
 
-Déduplication par place_id pour ne conserver qu'une occurence par producteur.
+Déduplication par place_id pour ne conserver qu'une occurrence par producteur.
 """
 
 import time
@@ -33,7 +33,7 @@ env_path = find_dotenv()
 if env_path:
     load_dotenv(env_path, override=True)
 else:
-    print(f"⚠️ .env non trouvé ; assurez-vous que votre clé est dans le fichier .env.")
+    print("⚠️ .env non trouvé ; assurez-vous que votre clé est dans le fichier .env.")
 API_KEY = os.getenv("GOOGLE_API_KEY")
 if not API_KEY:
     raise SystemExit("⚠️  GOOGLE_API_KEY manquant. Ajoutez votre clé dans .env.")
@@ -41,13 +41,13 @@ if not API_KEY:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 def read_list(path: Path) -> list[str]:
     return [line.strip() for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.startswith("#")]
+            if line.strip() and not line.strip().startswith("#")]
 
 
 def parse_city_postal(address: str) -> tuple[str, str]:
-    # Extrait code postal et ville
     m = re.search(r",\s*(\d{4,5})\s+([^,]+)", address)
     if m:
         return m.group(2).strip(), m.group(1).strip()
@@ -59,7 +59,6 @@ def build_maps_url(place_id: str) -> str:
 
 
 def places_text_search(query: str) -> list[dict]:
-    """Interroge l'API Google Places Text Search et gère la pagination."""
     endpoint = "https://maps.googleapis.com/maps/api/place/textsearch/json"
     params = {"query": query, "key": API_KEY}
     results = []
@@ -75,16 +74,32 @@ def places_text_search(query: str) -> list[dict]:
         params = {"pagetoken": token, "key": API_KEY}
     return results
 
+# Types Google à considérer comme ferme/producteur
+PRODUCER_TYPES = {"farm", "farmers_market"}
+# Mots-clés dans le nom garantissant un producteur (plus stricts)
+PRODUCER_NAME_KEYWORDS = [
+    "maraicher", "maraîcher",          # légumes/fruits
+    "miellerie",                        # miel
+    "apiculteur",                       # miel
+    "élevage",                          # viande, œufs, volaille
+    "fermier",                          # ferme générale
+    "volaille",                         # poulet, œufs
+    "marché fermier",                   # marché des producteurs
+    "producteur"                        # générique producteur
+    "ferme",                            # ferme générale
+
+]
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 def main():
     root = Path(__file__).resolve().parent.parent
     cities_file = root / "cities.txt"
     keywords_file = root / "keyword_producteurs.txt"
     output_csv = root / "data" / "producteurs.csv"
 
-    # Vérification
     for p in (cities_file, keywords_file):
         if not p.exists():
             raise SystemExit(f"❌ Fichier manquant : {p}")
@@ -92,22 +107,18 @@ def main():
     cities = read_list(cities_file)
     keywords = read_list(keywords_file)
 
-    # Prépare sortie
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "name", "address", "city", "postal_code",
         "rating", "user_ratings_total", "types", "maps_url",
         "matched_keyword"
     ]
-    # CSV header
     if not output_csv.exists():
         with output_csv.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
+            csv.DictWriter(f, fieldnames=fieldnames).writeheader()
 
-    seen = {}  # place_id -> True
+    seen = set()
 
-    # Parcours
     for city in cities:
         print(f"=== Ville : {city} ===")
         for kw in keywords:
@@ -117,13 +128,20 @@ def main():
                 pid = place.get("place_id")
                 if not pid or pid in seen:
                     continue
-                seen[pid] = True
+                types_list = place.get("types", [])
+                # Vérification type ou nom
                 name = place.get("name", "").strip()
+                name_l = name.lower()
+                if not (set(types_list) & PRODUCER_TYPES or
+                        any(key in name_l for key in PRODUCER_NAME_KEYWORDS)):
+                    continue
+                seen.add(pid)
+
                 address = place.get("formatted_address", "").strip()
                 city_name, postal = parse_city_postal(address)
                 rating = place.get("rating", "")
                 reviews = place.get("user_ratings_total", "")
-                types = "|".join(place.get("types", []))
+                types = "|".join(types_list)
                 maps_url = build_maps_url(pid)
 
                 row = {
