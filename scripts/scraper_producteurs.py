@@ -2,9 +2,9 @@
 """
 scraper_producteur.py
 
-Scraper dédié aux producteurs (fermes) locaux/bio en Belgique.
+Scraper dédié aux producteurs (fermes et producteurs) locaux/bio en Belgique.
 Utilise l'API Google Places pour rechercher uniquement les producteurs
-en s'appuyant sur des types et mots-clés stricts.
+en s'appuyant sur des mots-clés stricts dans le nom.
 
 Lit :
  - cities.txt               (liste des villes francophones)
@@ -74,22 +74,6 @@ def places_text_search(query: str) -> list[dict]:
         params = {"pagetoken": token, "key": API_KEY}
     return results
 
-# Types Google à considérer comme ferme/producteur
-PRODUCER_TYPES = {"farm", "farmers_market"}
-# Mots-clés dans le nom garantissant un producteur (plus stricts)
-PRODUCER_NAME_KEYWORDS = [
-    "maraicher", "maraîcher",          # légumes/fruits
-    "miellerie",                        # miel
-    "apiculteur",                       # miel
-    "élevage",                          # viande, œufs, volaille
-    "fermier",                          # ferme générale
-    "volaille",                         # poulet, œufs
-    "marché fermier",                   # marché des producteurs
-    "producteur"                        # générique producteur
-    "ferme",                            # ferme générale
-
-]
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -100,6 +84,7 @@ def main():
     keywords_file = root / "keyword_producteurs.txt"
     output_csv = root / "data" / "producteurs.csv"
 
+    # Vérification des fichiers
     for p in (cities_file, keywords_file):
         if not p.exists():
             raise SystemExit(f"❌ Fichier manquant : {p}")
@@ -107,6 +92,7 @@ def main():
     cities = read_list(cities_file)
     keywords = read_list(keywords_file)
 
+    # Préparation du CSV
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "name", "address", "city", "postal_code",
@@ -119,21 +105,22 @@ def main():
 
     seen = set()
 
+    # Scraping
     for city in cities:
         print(f"=== Ville : {city} ===")
         for kw in keywords:
             print(f"→ Recherche : {kw} in {city}")
+            lckw = kw.lower()
+            tokens = [t for t in lckw.split() if len(t) > 2]
             results = places_text_search(f"{kw} in {city}")
             for place in results:
                 pid = place.get("place_id")
                 if not pid or pid in seen:
                     continue
-                types_list = place.get("types", [])
-                # Vérification type ou nom
                 name = place.get("name", "").strip()
                 name_l = name.lower()
-                if not (set(types_list) & PRODUCER_TYPES or
-                        any(key in name_l for key in PRODUCER_NAME_KEYWORDS)):
+                # Exiger que tous tokens du kw soient dans le nom
+                if not all(token in name_l for token in tokens):
                     continue
                 seen.add(pid)
 
@@ -141,7 +128,7 @@ def main():
                 city_name, postal = parse_city_postal(address)
                 rating = place.get("rating", "")
                 reviews = place.get("user_ratings_total", "")
-                types = "|".join(types_list)
+                types = "|".join(place.get("types", []))
                 maps_url = build_maps_url(pid)
 
                 row = {
